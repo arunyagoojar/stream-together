@@ -1,6 +1,6 @@
 const EMBED = 'https://vidlink.pro'
 
-function build(path, { startAt, autoplay = true, syncToken } = {}) {
+function build(path, { startAt, autoplay = true } = {}) {
   const u = new URL(`${EMBED}/${path}`)
   u.searchParams.set('primaryColor', 'ffffff')
   u.searchParams.set('autoplay', autoplay ? 'true' : 'false')
@@ -9,7 +9,6 @@ function build(path, { startAt, autoplay = true, syncToken } = {}) {
     const t = Math.floor(startAt)
     u.searchParams.set('startAt', t)
   }
-  if (syncToken) u.searchParams.set('sync', syncToken)
   return u.toString()
 }
 

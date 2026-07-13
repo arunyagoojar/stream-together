@@ -11,7 +11,7 @@ const HIDE_DELAY = 3000
 // Seconds to add to wall-clock offset to account for iframe load/buffer lag
 const LOAD_BUFFER_S = 3
 const ECHO_SUPPRESS_MS = 1200
-const ECHO_PENDING_MS = 10000
+const ECHO_PENDING_MS = 120000
 
 export default function Watch() {
   const { type, id } = useParams()
@@ -30,6 +30,7 @@ export default function Watch() {
 
   // Playback UI state
   const [iframeSrc, setIframeSrc] = useState(null)
+  const [iframeKey, setIframeKey] = useState(0)
   const [paused, setPaused] = useState(false)
   const pausedRef = useRef(false)
   const [preparing, setPreparing] = useState(false)
@@ -72,10 +73,9 @@ export default function Watch() {
     return Math.max(0, pauseOffsetRef.current + (Date.now() - playStartRef.current) / 1000)
   }, [])
 
-  const buildSrc = useCallback((s, ep, at, autoplay, useStartAt = false, syncToken) => {
+  const buildSrc = useCallback((s, ep, at, autoplay, useStartAt = false) => {
     const opts = { autoplay }
     if (useStartAt) opts.startAt = Math.max(0, Math.floor(at))
-    if (syncToken) opts.syncToken = syncToken
     return type === 'tv' ? tvEmbed(id, s, ep, opts) : movieEmbed(id, opts)
   }, [type, id])
 
@@ -93,6 +93,26 @@ export default function Watch() {
     }
   }, [type, id, getOffset])
 
+  const queuePlayerEchoSuppression = useCallback((offset, playing) => {
+    const now = Date.now()
+    suppressBroadcastUntilRef.current = now + ECHO_SUPPRESS_MS
+    pendingEchoRef.current = {
+      offset,
+      playing,
+      until: now + ECHO_PENDING_MS,
+    }
+  }, [])
+
+  const loadPlayer = useCallback((s, ep, at, autoplay, {
+    useStartAt = false,
+    forceReload = false,
+    suppressEcho = false,
+  } = {}) => {
+    if (suppressEcho) queuePlayerEchoSuppression(at, autoplay)
+    setIframeSrc(buildSrc(s, ep, at, autoplay, useStartAt))
+    if (forceReload) setIframeKey((key) => key + 1)
+  }, [buildSrc, queuePlayerEchoSuppression])
+
   const shouldSuppressPlayerEcho = useCallback((eventType, currentTime) => {
     const pending = pendingEchoRef.current
     if (!pending) return false
@@ -104,7 +124,8 @@ export default function Watch() {
 
     const expectedPrimary = pending.playing ? 'play' : 'pause'
     const closeToTarget = Math.abs(currentTime - pending.offset) <= Math.max(4, LOAD_BUFFER_S + 3)
-    const shouldSuppress = eventType === expectedPrimary || (eventType === 'seeked' && closeToTarget)
+    const isPlaybackLoadEvent = eventType === 'play' || eventType === 'pause' || eventType === 'seeked'
+    const shouldSuppress = isPlaybackLoadEvent && (eventType === expectedPrimary || closeToTarget)
 
     if (eventType === expectedPrimary) {
       pendingEchoRef.current = null
@@ -123,9 +144,7 @@ export default function Watch() {
     const at = Math.max(0, (msg.offset || 0) + latency)
 
     if (suppressEcho) {
-      const now = Date.now()
-      suppressBroadcastUntilRef.current = now + ECHO_SUPPRESS_MS
-      pendingEchoRef.current = { offset: at, playing, until: now + ECHO_PENDING_MS }
+      queuePlayerEchoSuppression(at, playing)
     }
 
     setSeason(s)
@@ -136,8 +155,12 @@ export default function Watch() {
     playStartRef.current = playing ? Date.now() + LOAD_BUFFER_S * 1000 : null
     pausedRef.current = !playing
     setPaused(!playing)
-    setIframeSrc(buildSrc(s, ep, at, playing, true, `${Date.now()}-${Math.round(at)}`))
-  }, [buildSrc, setSeason, setEpisode])
+    loadPlayer(s, ep, at, playing, {
+      useStartAt: at > 2,
+      forceReload: true,
+      suppressEcho: false,
+    })
+  }, [loadPlayer, queuePlayerEchoSuppression, setSeason, setEpisode])
 
   useEffect(() => {
     pausedRef.current = paused
@@ -250,7 +273,9 @@ export default function Watch() {
       lastVidEventAtRef.current = null
       pausedRef.current = false
       setPaused(false)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, 0, true))
+      loadPlayer(seasonRef.current, episodeRef.current, 0, true, {
+        suppressEcho: true,
+      })
       sendState(buildSyncState({ offset: 0, playing: true }))
     } else {
       // Solo: autoplay, add buffer offset so wall-clock starts at right time
@@ -259,7 +284,7 @@ export default function Watch() {
       lastVidEventAtRef.current = null
       pausedRef.current = false
       setPaused(false)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, 0, true))
+      loadPlayer(seasonRef.current, episodeRef.current, 0, true)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info])
@@ -387,7 +412,10 @@ export default function Watch() {
         lastVidEventAtRef.current = null
         pausedRef.current = false
         setPaused(false)
-        setIframeSrc(buildSrc(msg.season, msg.episode, 0, true))
+        loadPlayer(msg.season, msg.episode, 0, true, {
+          forceReload: true,
+          suppressEcho: true,
+        })
         if (isHost) {
           sendState(buildSyncState({
             season: msg.season,
@@ -398,7 +426,7 @@ export default function Watch() {
         }
       }
     })
-  }, [inRoom, isHost, subscribe, buildSrc, setSeason, setEpisode, sendState, buildSyncState, applyPlaybackCommand])
+  }, [inRoom, isHost, subscribe, loadPlayer, setSeason, setEpisode, sendState, buildSyncState, applyPlaybackCommand])
 
   const togglePlay = useCallback(() => {
     const offset = getOffset()
@@ -429,7 +457,10 @@ export default function Watch() {
     pausedRef.current = false
     setPaused(false)
     setEpOpen(false)
-    setIframeSrc(buildSrc(newSeason, newEpisode, 0, true))
+    loadPlayer(newSeason, newEpisode, 0, true, {
+      forceReload: true,
+      suppressEcho: true,
+    })
     if (inRoom) send({ t: 'episode', season: newSeason, episode: newEpisode, sentAt: Date.now() })
     if (inRoom && isHost) {
       sendState(buildSyncState({
@@ -439,7 +470,7 @@ export default function Watch() {
         playing: true,
       }), 'LOCAL_ONLY')
     }
-  }, [inRoom, isHost, send, sendState, buildSrc, buildSyncState, setSeason, setEpisode])
+  }, [inRoom, isHost, send, sendState, loadPlayer, buildSyncState, setSeason, setEpisode])
 
   const copyCode = useCallback(() => {
     navigator.clipboard?.writeText(roomCode).catch(() => {})
@@ -478,6 +509,7 @@ export default function Watch() {
       {/* Iframe fills entire viewport */}
       {iframeSrc && (
         <iframe
+          key={iframeKey}
           src={iframeSrc}
           title={title}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
