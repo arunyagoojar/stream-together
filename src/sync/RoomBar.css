@@ -37,6 +37,18 @@
   font-size: 13px;
 }
 
+.room-menu {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.compact-room {
+  gap: 9px;
+  padding: 7px 8px 7px 12px;
+}
+
 .dot {
   width: 8px;
   height: 8px;
@@ -59,13 +71,14 @@
   cursor: pointer;
 }
 
-.members { color: rgba(255, 255, 255, 0.75); }
-.role {
-  color: rgba(255, 255, 255, 0.5);
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.05em;
+.compact-code {
+  max-width: 82px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+
+.members { color: rgba(255, 255, 255, 0.75); }
 
 .leave,
 .room-action {
@@ -79,6 +92,14 @@
 }
 .leave:hover,
 .room-action:hover { background: rgba(255, 255, 255, 0.2); }
+
+.room-exit {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+}
 
 .or { color: rgba(255, 255, 255, 0.5); font-size: 12px; }
 
@@ -95,3 +116,46 @@
   outline: none;
 }
 .room-input::placeholder { color: rgba(255, 255, 255, 0.4); }
+
+.recent-rooms {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.recent-room {
+  display: inline-flex;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(20, 20, 22, 0.55);
+  backdrop-filter: blur(16px) saturate(160%);
+  -webkit-backdrop-filter: blur(16px) saturate(160%);
+}
+
+.recent-room button {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.recent-room button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.recent-remove {
+  width: 22px;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  color: rgba(255, 255, 255, 0.48) !important;
+  border-left: 1px solid rgba(255, 255, 255, 0.12) !important;
+  font-family: inherit !important;
+  letter-spacing: 0 !important;
+}

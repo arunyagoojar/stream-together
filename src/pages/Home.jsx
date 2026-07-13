@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { trending, search, img, hasKey } from '../lib/tmdb.js'
 import { useDebounce } from '../hooks/useDebounce.js'
-import { useSync } from '../sync/SyncProvider.jsx'
+import { useSync } from '../sync/SyncContext.js'
 import './Home.css'
 
 export default function Home() {

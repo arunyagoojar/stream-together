@@ -1,14 +1,15 @@
 const EMBED = 'https://vidlink.pro'
 
-function build(path, { startAt, autoplay = true } = {}) {
+function build(path, { startAt, autoplay = true, syncToken } = {}) {
   const u = new URL(`${EMBED}/${path}`)
   u.searchParams.set('primaryColor', 'ffffff')
   u.searchParams.set('autoplay', autoplay ? 'true' : 'false')
-  // vidlink doesn't document startAt, but we can try setting it, or just rely on postMessage later if needed.
+  // Room sync reloads the iframe at a shared timestamp.
   if (startAt != null && startAt > 0) {
     const t = Math.floor(startAt)
-    u.searchParams.set('startAt', t) // Try it, no harm
+    u.searchParams.set('startAt', t)
   }
+  if (syncToken) u.searchParams.set('sync', syncToken)
   return u.toString()
 }
 

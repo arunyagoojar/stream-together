@@ -29,22 +29,6 @@
   z-index: 1;
 }
 
-/* ── Centered click-overlay (play/pause on video click) ───────────── */
-.click-overlay {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: 240px;
-  height: 240px;
-  z-index: 10;
-  cursor: pointer;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 /* ── Thin hover-trigger strip at very top ────────────────────── */
 /* Sits above the iframe so mouse events reach it even when iframe is focused */
 .nav-hover-strip {
@@ -340,6 +324,11 @@
   color: #fff;
 }
 
+.compact-room {
+  gap: 9px;
+  padding: 6px 7px 6px 12px;
+}
+
 .dot {
   width: 7px;
   height: 7px;
@@ -366,6 +355,13 @@
 }
 .code-chip:hover { background: rgba(255,255,255,0.18); }
 
+.compact-code {
+  max-width: 82px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .members-badge {
   color: rgba(255,255,255,0.7);
   font-size: 12px;
@@ -389,7 +385,23 @@
   border-color: rgba(239,68,68,0.5);
 }
 
+.room-exit-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
 /* ── Room join (not-in-room state) ───────────────────────────────────────── */
+.room-join-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
 .room-join-nav {
   display: flex;
   align-items: center;
@@ -412,6 +424,50 @@
 }
 .room-input-nav::placeholder { color: rgba(255,255,255,0.35); }
 .room-input-nav:focus { border-color: rgba(255,255,255,0.45); }
+
+.recent-room-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  max-width: 100%;
+}
+
+.recent-room-chip {
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+}
+
+.recent-room-chip button {
+  color: rgba(255,255,255,0.82);
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 7px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.recent-room-chip button:hover {
+  background: rgba(255,255,255,0.12);
+  color: #fff;
+}
+
+.recent-room-remove {
+  width: 22px;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  color: rgba(255,255,255,0.48) !important;
+  border-left: 1px solid rgba(255,255,255,0.12) !important;
+  font-family: inherit !important;
+  letter-spacing: 0 !important;
+}
 
 /* ── Preparing / sync overlay ────────────────────────────────────────────── */
 .sync-overlay {
@@ -497,6 +553,10 @@
 
   .room-pill-nav, .room-join-nav {
     flex-wrap: wrap;
+  }
+
+  .room-join-stack {
+    align-items: flex-start;
   }
 
   /* Prevent episode dropdown from overflowing screen width */

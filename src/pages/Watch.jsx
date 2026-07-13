@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { details, seasonEpisodes } from '../lib/tmdb.js'
 import { movieEmbed, tvEmbed } from '../lib/vidapi.js'
-import { useSync } from '../sync/SyncProvider.jsx'
+import { useSync } from '../sync/SyncContext.js'
 import confetti from 'canvas-confetti'
 import './Watch.css'
 
@@ -10,13 +10,15 @@ import './Watch.css'
 const HIDE_DELAY = 3000
 // Seconds to add to wall-clock offset to account for iframe load/buffer lag
 const LOAD_BUFFER_S = 3
+const ECHO_SUPPRESS_MS = 1200
+const ECHO_PENDING_MS = 10000
 
 export default function Watch() {
   const { type, id } = useParams()
   const navigate = useNavigate()
   const {
     inRoom, isHost, roomCode, members, status,
-    createRoom, joinRoom, leaveRoom,
+    createRoom, joinRoom, leaveRoom, recentRooms, forgetRecentRoom,
     send, sendState, requestState, subscribe,
   } = useSync()
   const stageRef = useRef(null)
@@ -29,8 +31,8 @@ export default function Watch() {
   // Playback UI state
   const [iframeSrc, setIframeSrc] = useState(null)
   const [paused, setPaused] = useState(false)
+  const pausedRef = useRef(false)
   const [preparing, setPreparing] = useState(false)
-  const [syncFlash, setSyncFlash] = useState(false)
 
   // Overlay auto-hide
   const [overlayVisible, setOverlayVisible] = useState(true)
@@ -38,7 +40,6 @@ export default function Watch() {
   const hideTimerRef = useRef(null)
 
   // Room join UI (when not yet in a room)
-  const [roomOpen, setRoomOpen] = useState(false)
   const [roomCodeInput, setRoomCodeInput] = useState('')
   const [copied, setCopied] = useState(false)
 
@@ -59,22 +60,88 @@ export default function Watch() {
   const playStartRef = useRef(null)  // effective start time (ms)
   const pauseOffsetRef = useRef(0)   // accumulated seconds at last pause
   const vidTimeRef = useRef(0)       // latest exact time from iframe (if available)
+  const lastVidEventAtRef = useRef(null)
+  const suppressBroadcastUntilRef = useRef(0)
+  const pendingEchoRef = useRef(null)
 
   const getOffset = useCallback(() => {
     if (playStartRef.current == null) return vidTimeRef.current || pauseOffsetRef.current
-    if (vidTimeRef.current > 0) return vidTimeRef.current
+    if (vidTimeRef.current > 0 && lastVidEventAtRef.current != null) {
+      return Math.max(0, vidTimeRef.current + (Date.now() - lastVidEventAtRef.current) / 1000)
+    }
     return Math.max(0, pauseOffsetRef.current + (Date.now() - playStartRef.current) / 1000)
   }, [])
 
-  const buildSrc = useCallback((s, ep, at, autoplay) => {
-    const opts = { startAt: Math.max(0, Math.floor(at)), autoplay }
+  const buildSrc = useCallback((s, ep, at, autoplay, useStartAt = false, syncToken) => {
+    const opts = { autoplay }
+    if (useStartAt) opts.startAt = Math.max(0, Math.floor(at))
+    if (syncToken) opts.syncToken = syncToken
     return type === 'tv' ? tvEmbed(id, s, ep, opts) : movieEmbed(id, opts)
   }, [type, id])
 
-  const flashSynced = useCallback(() => {
-    setSyncFlash(true)
-    setTimeout(() => setSyncFlash(false), 2200)
+  const buildSyncState = useCallback((overrides = {}) => {
+    const playing = !pausedRef.current
+    return {
+      path: `/watch/${type}/${id}`,
+      type,
+      id,
+      season: seasonRef.current,
+      episode: episodeRef.current,
+      offset: getOffset(),
+      playing,
+      ...overrides,
+    }
+  }, [type, id, getOffset])
+
+  const shouldSuppressPlayerEcho = useCallback((eventType, currentTime) => {
+    const pending = pendingEchoRef.current
+    if (!pending) return false
+
+    if (Date.now() > pending.until) {
+      pendingEchoRef.current = null
+      return false
+    }
+
+    const expectedPrimary = pending.playing ? 'play' : 'pause'
+    const closeToTarget = Math.abs(currentTime - pending.offset) <= Math.max(4, LOAD_BUFFER_S + 3)
+    const shouldSuppress = eventType === expectedPrimary || (eventType === 'seeked' && closeToTarget)
+
+    if (eventType === expectedPrimary) {
+      pendingEchoRef.current = null
+    }
+
+    return shouldSuppress
   }, [])
+
+  const applyPlaybackCommand = useCallback((msg, { addLatency = true, suppressEcho = true } = {}) => {
+    const s = msg.season ?? seasonRef.current
+    const ep = msg.episode ?? episodeRef.current
+    const playing = Boolean(msg.playing)
+    const latency = addLatency && playing
+      ? Math.min((Date.now() - (msg.sentAt || Date.now())) / 1000, 5)
+      : 0
+    const at = Math.max(0, (msg.offset || 0) + latency)
+
+    if (suppressEcho) {
+      const now = Date.now()
+      suppressBroadcastUntilRef.current = now + ECHO_SUPPRESS_MS
+      pendingEchoRef.current = { offset: at, playing, until: now + ECHO_PENDING_MS }
+    }
+
+    setSeason(s)
+    setEpisode(ep)
+    vidTimeRef.current = at
+    lastVidEventAtRef.current = null
+    pauseOffsetRef.current = at
+    playStartRef.current = playing ? Date.now() + LOAD_BUFFER_S * 1000 : null
+    pausedRef.current = !playing
+    setPaused(!playing)
+    setIframeSrc(buildSrc(s, ep, at, playing, true, `${Date.now()}-${Math.round(at)}`))
+  }, [buildSrc, setSeason, setEpisode])
+
+  useEffect(() => {
+    pausedRef.current = paused
+  }, [paused])
 
   // ── Overlay auto-hide ─────────────────────────────────────────────────────
   const scheduleHide = useCallback(() => {
@@ -95,6 +162,7 @@ export default function Watch() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Broadcast Vidlink player actions from whichever peer caused them.
   useEffect(() => {
     const handleMessage = (e) => {
       if (e.origin !== 'https://vidlink.pro') return
@@ -102,12 +170,55 @@ export default function Watch() {
         const { event: eventType, currentTime } = e.data.data
         if (typeof currentTime === 'number') {
           vidTimeRef.current = currentTime
+          lastVidEventAtRef.current = Date.now()
+
+          if (eventType === 'play') {
+            pausedRef.current = false
+            setPaused(false)
+            playStartRef.current = Date.now()
+            pauseOffsetRef.current = currentTime
+          } else if (eventType === 'pause') {
+            pausedRef.current = true
+            setPaused(true)
+            playStartRef.current = null
+            pauseOffsetRef.current = currentTime
+          } else if (eventType === 'seeked') {
+            pauseOffsetRef.current = currentTime
+            if (!pausedRef.current) {
+              playStartRef.current = Date.now()
+            }
+          }
+
+          if (!inRoom || Date.now() < suppressBroadcastUntilRef.current || shouldSuppressPlayerEcho(eventType, currentTime)) return
+          if (eventType !== 'play' && eventType !== 'pause' && eventType !== 'seeked') return
+
+          const playing = eventType === 'play'
+            ? true
+            : eventType === 'pause'
+              ? false
+              : !pausedRef.current
+
+          const msg = {
+            t: 'playback',
+            action: eventType,
+            offset: currentTime,
+            season: seasonRef.current,
+            episode: episodeRef.current,
+            playing,
+            sentAt: Date.now(),
+          }
+
+          send(msg)
+
+          if (isHost) {
+            sendState(buildSyncState({ offset: currentTime, playing }), 'LOCAL_ONLY')
+          }
         }
       }
     }
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [])
+  }, [isHost, inRoom, send, sendState, buildSyncState, shouldSuppressPlayerEcho])
 
   // Always show overlay when paused, preparing or pinned
   useEffect(() => {
@@ -133,28 +244,30 @@ export default function Watch() {
     if (inRoom && !isHost) return // guest waits for sync-state instead
 
     if (inRoom) {
-      // Host in a room: start paused and broadcast state to guests
-      playStartRef.current = null
+      // Host in a room: let Vidlink load normally, then mirror events to guests.
+      playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
       pauseOffsetRef.current = 0
-      setPaused(true)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, 0, false))
-      sendState({
-        path: `/watch/${type}/${id}`,
-        type, id,
-        season: seasonRef.current,
-        episode: episodeRef.current,
-        offset: 0,
-        playing: false,
-      })
+      lastVidEventAtRef.current = null
+      pausedRef.current = false
+      setPaused(false)
+      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, 0, true))
+      sendState(buildSyncState({ offset: 0, playing: true }))
     } else {
       // Solo: autoplay, add buffer offset so wall-clock starts at right time
       playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
       pauseOffsetRef.current = 0
+      lastVidEventAtRef.current = null
+      pausedRef.current = false
       setPaused(false)
       setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, 0, true))
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [info])
+
+  useEffect(() => {
+    if (!info || !inRoom || !isHost) return
+    sendState(buildSyncState(), 'LOCAL_ONLY')
+  }, [info, inRoom, isHost, sendState, buildSyncState])
 
   // Confetti celebration on join
   useEffect(() => {
@@ -169,27 +282,30 @@ export default function Watch() {
     }
   }, [inRoom])
 
-  // ── HOST: guest-joined → pause + send state to that guest ─────────────────
+  // ── HOST: guest-joined/request-state → send state to that guest ───────────
   useEffect(() => {
     if (!inRoom || !isHost) return
     return subscribe((msg) => {
-      if (msg.t !== 'guest-joined') return
+      if (msg.t !== 'guest-joined' && msg.t !== 'request-state') return
       const offset = getOffset()
-      pauseOffsetRef.current = offset
-      playStartRef.current = null
-      setPaused(true)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, offset, false))
-      sendState({
-        path: `/watch/${type}/${id}`,
-        type, id,
-        season: seasonRef.current,
-        episode: episodeRef.current,
+      sendState(buildSyncState({
         offset,
-        playing: false,
-        sentAt: Date.now(),
-      }, msg.peerId)
+        playing: !pausedRef.current,
+      }), msg.peerId)
     })
-  }, [inRoom, isHost, subscribe, getOffset, buildSrc, sendState, type, id])
+  }, [inRoom, isHost, subscribe, getOffset, sendState, buildSyncState])
+
+  // Periodically update hostStateRef so guests who join mid-stream get the right state
+  useEffect(() => {
+    if (!isHost || !inRoom) return
+    const int = setInterval(() => {
+      sendState(buildSyncState({
+        offset: getOffset(),
+        playing: !pausedRef.current,
+      }), 'LOCAL_ONLY')
+    }, 5000)
+    return () => clearInterval(int)
+  }, [isHost, inRoom, getOffset, sendState, buildSyncState])
 
   // ── GUEST: receive sync-state once, show "Preparing" ─────────────────────
   const guestInitRef = useRef(false)
@@ -197,96 +313,111 @@ export default function Watch() {
     if (!inRoom || isHost) return
     guestInitRef.current = false
     setPreparing(true)
+    setError(null)
+
+    let retryTimer
+    let timeoutTimer
 
     const unsub = subscribe((msg) => {
       if (msg.t !== 'sync-state' || guestInitRef.current) return
       guestInitRef.current = true
+      clearInterval(retryTimer)
+      clearTimeout(timeoutTimer)
       const latency = Math.min((Date.now() - (msg.sentAt || Date.now())) / 1000, 5)
       const at = Math.max(0, (msg.offset || 0) + latency)
+      const shouldPlay = Boolean(msg.playing)
       setSeason(msg.season ?? 1)
       setEpisode(msg.episode ?? 1)
       pauseOffsetRef.current = at
-      playStartRef.current = null
+      playStartRef.current = shouldPlay ? Date.now() + LOAD_BUFFER_S * 1000 : null
       setTimeout(() => {
-        setIframeSrc(buildSrc(msg.season ?? 1, msg.episode ?? 1, at, false))
-        setPaused(true)
+        applyPlaybackCommand({
+          ...msg,
+          offset: at,
+          playing: shouldPlay,
+        }, { addLatency: false, suppressEcho: true })
         setPreparing(false)
-        flashSynced()
       }, 400)
     })
 
-    const t = setTimeout(() => requestState(), 100)
-    return () => { unsub(); clearTimeout(t) }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inRoom, isHost])
+    const askForState = () => {
+      if (!guestInitRef.current) requestState()
+    }
 
-  // ── BOTH: react to play / pause / episode messages from peers ────────────
+    const initialTimer = setTimeout(askForState, 100)
+    retryTimer = setInterval(askForState, 1000)
+    timeoutTimer = setTimeout(() => {
+      if (guestInitRef.current) return
+      setPreparing(false)
+      setError('Could not get the host playback state. Ask the host to stay on the watch page, then try rejoining the room.')
+    }, 15000)
+
+    return () => {
+      unsub()
+      clearTimeout(initialTimer)
+      clearInterval(retryTimer)
+      clearTimeout(timeoutTimer)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inRoom, isHost, applyPlaybackCommand])
+
+  // ── BOTH: react to playback / episode messages from peers ────────────────
   useEffect(() => {
     if (!inRoom) return
     return subscribe((msg) => {
-      if (msg.t === 'play') {
-        const latency = (Date.now() - (msg.sentAt || Date.now())) / 1000
-        const at = Math.max(0, (msg.offset || 0) + latency)
-        const s = msg.season ?? seasonRef.current
-        const ep = msg.episode ?? episodeRef.current
-        pauseOffsetRef.current = at
-        playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
-        setSeason(s); setEpisode(ep)
-        setPaused(false)
-        setIframeSrc(buildSrc(s, ep, at, true))
+      if (msg.t === 'playback') {
+        applyPlaybackCommand(msg)
+        if (isHost) {
+          sendState(buildSyncState({
+            season: msg.season ?? seasonRef.current,
+            episode: msg.episode ?? episodeRef.current,
+            offset: msg.offset ?? 0,
+            playing: Boolean(msg.playing),
+          }), 'LOCAL_ONLY')
+        }
       }
-      if (msg.t === 'pause') {
-        const at = msg.offset ?? 0
-        pauseOffsetRef.current = at
-        playStartRef.current = null
-        setPaused(true)
-        if (msg.season !== undefined && msg.season !== seasonRef.current) setSeason(msg.season)
-        if (msg.episode !== undefined && msg.episode !== episodeRef.current) setEpisode(msg.episode)
-        setIframeSrc(buildSrc(
-          msg.season ?? seasonRef.current,
-          msg.episode ?? episodeRef.current,
-          at, false,
-        ))
+      if (msg.t === 'play' || msg.t === 'pause') {
+        const playing = msg.t === 'play'
+        applyPlaybackCommand({ ...msg, t: 'playback', playing })
       }
       if (msg.t === 'episode') {
         setSeason(msg.season); setEpisode(msg.episode)
         pauseOffsetRef.current = 0
         playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
+        lastVidEventAtRef.current = null
+        pausedRef.current = false
         setPaused(false)
         setIframeSrc(buildSrc(msg.season, msg.episode, 0, true))
-      }
-      if (msg.t === 'sync-state') {
-        const at = msg.offset ?? 0
-        pauseOffsetRef.current = at
-        playStartRef.current = msg.playing ? Date.now() : null
-        setPaused(!msg.playing)
-        if (msg.season !== undefined && msg.season !== seasonRef.current) setSeason(msg.season)
-        if (msg.episode !== undefined && msg.episode !== episodeRef.current) setEpisode(msg.episode)
-        setIframeSrc(buildSrc(
-          msg.season ?? seasonRef.current,
-          msg.episode ?? episodeRef.current,
-          at, msg.playing
-        ))
+        if (isHost) {
+          sendState(buildSyncState({
+            season: msg.season,
+            episode: msg.episode,
+            offset: 0,
+            playing: true,
+          }), 'LOCAL_ONLY')
+        }
       }
     })
-  }, [inRoom, subscribe, buildSrc, setSeason, setEpisode])
+  }, [inRoom, isHost, subscribe, buildSrc, setSeason, setEpisode, sendState, buildSyncState, applyPlaybackCommand])
 
   const togglePlay = useCallback(() => {
-    if (paused) {
-      const at = vidTimeRef.current || pauseOffsetRef.current
-      playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
-      setPaused(false)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, at, true))
-      if (inRoom) send({ t: 'play', offset: at, season: seasonRef.current, episode: episodeRef.current, sentAt: Date.now() })
-    } else {
-      const at = vidTimeRef.current || getOffset()
-      pauseOffsetRef.current = at
-      playStartRef.current = null
-      setPaused(true)
-      setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, at, false))
-      if (inRoom) send({ t: 'pause', offset: at, season: seasonRef.current, episode: episodeRef.current, sentAt: Date.now() })
+    const offset = getOffset()
+    const playing = paused
+    const msg = {
+      t: 'playback',
+      action: playing ? 'play' : 'pause',
+      offset,
+      season: seasonRef.current,
+      episode: episodeRef.current,
+      playing,
+      sentAt: Date.now(),
     }
-  }, [paused, inRoom, send, getOffset, buildSrc])
+
+    applyPlaybackCommand(msg, { addLatency: false, suppressEcho: true })
+
+    if (inRoom) send(msg)
+    if (inRoom && isHost) sendState(buildSyncState({ offset, playing }), 'LOCAL_ONLY')
+  }, [paused, inRoom, isHost, send, sendState, getOffset, buildSyncState, applyPlaybackCommand])
 
   // ── Episode/Season change ─────────────────────────────────────────────────
   const changeEpisode = useCallback((newSeason, newEpisode) => {
@@ -294,14 +425,24 @@ export default function Watch() {
     setSeason(newSeason); setEpisode(newEpisode)
     pauseOffsetRef.current = 0
     playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
+    lastVidEventAtRef.current = null
+    pausedRef.current = false
     setPaused(false)
     setEpOpen(false)
     setIframeSrc(buildSrc(newSeason, newEpisode, 0, true))
     if (inRoom) send({ t: 'episode', season: newSeason, episode: newEpisode, sentAt: Date.now() })
-  }, [inRoom, isHost, send, buildSrc, setSeason, setEpisode])
+    if (inRoom && isHost) {
+      sendState(buildSyncState({
+        season: newSeason,
+        episode: newEpisode,
+        offset: 0,
+        playing: true,
+      }), 'LOCAL_ONLY')
+    }
+  }, [inRoom, isHost, send, sendState, buildSrc, buildSyncState, setSeason, setEpisode])
 
   const copyCode = useCallback(() => {
-    navigator.clipboard?.writeText(roomCode)
+    navigator.clipboard?.writeText(roomCode).catch(() => {})
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
   }, [roomCode])
@@ -311,6 +452,20 @@ export default function Watch() {
   const seasons = (info?.seasons || []).filter((s) => s.season_number > 0)
   const canControl = !inRoom || isHost
   const currentEp = episodes.find((e) => e.episode_number === episode)
+  const visibleRecentRooms = recentRooms.filter((room) => room.code !== roomCode).slice(0, 3)
+  const showShareCode = isHost && members <= 1
+
+  useEffect(() => {
+    if (!showShareCode || !roomCode) {
+      setCopied(false)
+      return
+    }
+
+    navigator.clipboard?.writeText(roomCode).catch(() => {})
+    setCopied(true)
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [showShareCode, roomCode])
 
   return (
     <div
@@ -327,7 +482,6 @@ export default function Watch() {
           title={title}
           allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
           allowFullScreen
-          referrerPolicy="origin"
           className="watch-iframe"
         />
       )}
@@ -339,11 +493,6 @@ export default function Watch() {
           <p className="sync-label">Preparing your room…</p>
           <p className="sync-sub">Waiting for host's playback position</p>
         </div>
-      )}
-
-      {/* Centered click-overlay — clicking toggles play/pause */}
-      {iframeSrc && !preparing && inRoom && (
-        <div className="click-overlay" onClick={togglePlay} />
       )}
 
       {/* Thin transparent strip at very top — catches hover when iframe steals events */}
@@ -433,27 +582,44 @@ export default function Watch() {
 
           {/* Room UI */}
           {inRoom ? (
-            <div className="room-pill-nav joined-success">
+            <div className="room-pill-nav compact-room" title={`Room ${roomCode}`}>
               <span className={`dot dot-${status}`} />
-              <button className="code-chip" onClick={copyCode} title="Copy room code">
-                {roomCode}&nbsp;{copied ? '✓' : '⧉'}
-              </button>
-              <span className="members-badge">{members} watching</span>
-              <span className="role-badge">{isHost ? 'host' : 'guest'}</span>
-              <button className="nav-btn leave-btn" onClick={leaveRoom}>Leave</button>
+              {showShareCode && (
+                <button className="code-chip compact-code" onClick={copyCode} title="Copy room code">
+                  {roomCode}{copied ? ' ✓' : ''}
+                </button>
+              )}
+              <span className="members-badge">{members} in room</span>
+              <button className="nav-btn leave-btn room-exit-btn" onClick={leaveRoom} title="Leave room">×</button>
             </div>
           ) : (
-            <div className="room-join-nav">
-              <button className="nav-btn" onClick={createRoom}>Create Room</button>
-              <input
-                className="room-input-nav"
-                placeholder="code"
-                value={roomCodeInput}
-                maxLength={6}
-                onChange={(e) => setRoomCodeInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && joinRoom(roomCodeInput)}
-              />
-              <button className="nav-btn" onClick={() => joinRoom(roomCodeInput)}>Join</button>
+            <div className="room-join-stack">
+              <div className="room-join-nav">
+                <button className="nav-btn" onClick={createRoom}>Create Room</button>
+                <input
+                  className="room-input-nav"
+                  placeholder="code"
+                  value={roomCodeInput}
+                  maxLength={6}
+                  onChange={(e) => setRoomCodeInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && joinRoom(roomCodeInput)}
+                />
+                <button className="nav-btn" onClick={() => joinRoom(roomCodeInput)}>Join</button>
+              </div>
+              {visibleRecentRooms.length > 0 && (
+                <div className="recent-room-nav" aria-label="Recent rooms">
+                  {visibleRecentRooms.map((room) => (
+                    <span className="recent-room-chip" key={room.code}>
+                      <button type="button" onClick={() => joinRoom(room.code)} title={`Join ${room.code}`}>
+                        {room.code}
+                      </button>
+                      <button type="button" className="recent-room-remove" onClick={() => forgetRecentRoom(room.code)} title="Forget room">
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

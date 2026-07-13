@@ -3,7 +3,7 @@ import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import Home from './pages/Home.jsx'
 import Watch from './pages/Watch.jsx'
 import RoomBar from './sync/RoomBar.jsx'
-import { useSync } from './sync/SyncProvider.jsx'
+import { useSync } from './sync/SyncContext.js'
 
 export default function App() {
   const { inRoom, isHost, subscribe } = useSync()
