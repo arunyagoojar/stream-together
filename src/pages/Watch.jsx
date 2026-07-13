@@ -411,23 +411,16 @@ export default function Watch() {
             </div>
           ) : (
             <div className="room-join-nav">
-              <button className={`nav-btn${roomOpen ? ' active' : ''}`} onClick={() => setRoomOpen(!roomOpen)}>
-                Watch Together {roomOpen ? '✕' : ''}
-              </button>
-              <div className={`room-join-expand${roomOpen ? ' open' : ''}`}>
-                <div className="room-join-inner">
-                  <button className="nav-btn" onClick={createRoom}>Create Room</button>
-                  <input
-                    className="room-input-nav"
-                    placeholder="code"
-                    value={roomCodeInput}
-                    maxLength={6}
-                    onChange={(e) => setRoomCodeInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && joinRoom(roomCodeInput)}
-                  />
-                  <button className="nav-btn" onClick={() => joinRoom(roomCodeInput)}>Join</button>
-                </div>
-              </div>
+              <button className="nav-btn" onClick={createRoom}>Create Room</button>
+              <input
+                className="room-input-nav"
+                placeholder="code"
+                value={roomCodeInput}
+                maxLength={6}
+                onChange={(e) => setRoomCodeInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && joinRoom(roomCodeInput)}
+              />
+              <button className="nav-btn" onClick={() => joinRoom(roomCodeInput)}>Join</button>
             </div>
           )}
 

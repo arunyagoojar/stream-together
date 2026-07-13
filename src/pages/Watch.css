@@ -467,3 +467,78 @@
 
 /* ── Fullscreen ──────────────────────────────────────────────────────────── */
 :fullscreen .watch-nav { position: fixed; }
+
+/* ── Responsive Adjustments ──────────────────────────────────────────────── */
+
+/* Portrait Mobile (small width) */
+@media (max-width: 768px) and (orientation: portrait) {
+  .watch-nav {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  /* Disable absolute centering so it doesn't overlap left/right items */
+  .sync-status-btn {
+    position: static;
+    transform: none;
+    order: 2;
+  }
+
+  /* Wrap right controls to a new line and allow them to wrap internally */
+  .nav-right {
+    width: 100%;
+    justify-content: flex-start;
+    order: 3;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .room-pill-nav, .room-join-nav {
+    flex-wrap: wrap;
+  }
+
+  /* Prevent episode dropdown from overflowing screen width */
+  .ep-dropdown {
+    width: calc(100vw - 32px);
+    max-width: 320px;
+    right: auto;
+    left: 0;
+  }
+
+  .nav-btn, .room-input-nav {
+    font-size: 12px;
+    padding: 6px 12px;
+  }
+
+  /* Hide lower-priority text to save horizontal space */
+  .members-badge {
+    display: none;
+  }
+}
+
+/* Landscape Mobile (short height) */
+@media (max-height: 500px) and (orientation: landscape) {
+  .watch-nav {
+    padding: 8px 16px;
+  }
+
+  .nav-btn, .room-input-nav, .sync-status-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  .nav-right {
+    gap: 6px;
+  }
+
+  /* Prevent dropdown from getting cut off at bottom of screen */
+  .ep-dropdown {
+    max-height: 240px;
+  }
+
+  .members-badge {
+    display: none;
+  }
+}
