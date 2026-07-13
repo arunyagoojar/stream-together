@@ -224,6 +224,8 @@ export default function Watch() {
         pauseOffsetRef.current = at
         playStartRef.current = null
         setPaused(true)
+        if (msg.season !== undefined && msg.season !== seasonRef.current) setSeason(msg.season)
+        if (msg.episode !== undefined && msg.episode !== episodeRef.current) setEpisode(msg.episode)
         setIframeSrc(buildSrc(
           msg.season ?? seasonRef.current,
           msg.episode ?? episodeRef.current,
@@ -236,6 +238,19 @@ export default function Watch() {
         playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
         setPaused(false)
         setIframeSrc(buildSrc(msg.season, msg.episode, 0, true))
+      }
+      if (msg.t === 'sync-state') {
+        const at = msg.offset ?? 0
+        pauseOffsetRef.current = at
+        playStartRef.current = msg.playing ? Date.now() : null
+        setPaused(!msg.playing)
+        if (msg.season !== undefined && msg.season !== seasonRef.current) setSeason(msg.season)
+        if (msg.episode !== undefined && msg.episode !== episodeRef.current) setEpisode(msg.episode)
+        setIframeSrc(buildSrc(
+          msg.season ?? seasonRef.current,
+          msg.episode ?? episodeRef.current,
+          at, msg.playing
+        ))
       }
     })
   }, [inRoom, subscribe, buildSrc, setSeason, setEpisode])
@@ -327,7 +342,10 @@ export default function Watch() {
       <nav className={`watch-nav${overlayVisible ? ' visible' : ''}`}>
 
         {/* Far left: Back */}
-        <button className="nav-btn" onClick={() => navigate('/')}>
+        <button className="nav-btn" onClick={() => {
+          if (inRoom && isHost) send({ t: 'navigate', path: '/' })
+          navigate('/')
+        }}>
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 18 9 12 15 6" />
           </svg>

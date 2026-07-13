@@ -13,7 +13,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false)
   const debounced = useDebounce(query)
   const navigate = useNavigate()
-  const { inRoom, send } = useSync()
+  const { inRoom, isHost, send } = useSync()
 
   useEffect(() => {
     if (!hasKey()) return
@@ -40,7 +40,7 @@ export default function Home() {
   const open = (item) => {
     const type = item.media_type === 'tv' ? 'tv' : 'movie'
     const path = `/watch/${type}/${item.id}`
-    if (inRoom) send({ t: 'navigate', path })
+    if (inRoom && isHost) send({ t: 'navigate', path })
     navigate(path)
   }
 
