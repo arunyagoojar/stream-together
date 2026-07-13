@@ -1,15 +1,13 @@
-const EMBED = 'https://vidapi.ru/embed'
+const EMBED = 'https://vidlink.pro'
 
 function build(path, { startAt, autoplay = true } = {}) {
   const u = new URL(`${EMBED}/${path}`)
-  u.searchParams.set('color', 'ffffff')
-  u.searchParams.set('autoplay', autoplay ? '1' : '0')
-  u.searchParams.set('ui', '0')         // hide player's own title overlay
-  // Always set both startAt and resumeAt so the player never ignores the seek
+  u.searchParams.set('primaryColor', 'ffffff')
+  u.searchParams.set('autoplay', autoplay ? 'true' : 'false')
+  // vidlink doesn't document startAt, but we can try setting it, or just rely on postMessage later if needed.
   if (startAt != null && startAt > 0) {
     const t = Math.floor(startAt)
-    u.searchParams.set('startAt', t)
-    u.searchParams.set('resumeAt', t)
+    u.searchParams.set('startAt', t) // Try it, no harm
   }
   return u.toString()
 }

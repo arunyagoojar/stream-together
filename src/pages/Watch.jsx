@@ -58,9 +58,11 @@ export default function Watch() {
   // naturally subtracts buffering lag from elapsed time.
   const playStartRef = useRef(null)  // effective start time (ms)
   const pauseOffsetRef = useRef(0)   // accumulated seconds at last pause
+  const vidTimeRef = useRef(0)       // latest exact time from iframe (if available)
 
   const getOffset = useCallback(() => {
-    if (playStartRef.current == null) return pauseOffsetRef.current
+    if (playStartRef.current == null) return vidTimeRef.current || pauseOffsetRef.current
+    if (vidTimeRef.current > 0) return vidTimeRef.current
     return Math.max(0, pauseOffsetRef.current + (Date.now() - playStartRef.current) / 1000)
   }, [])
 
@@ -91,6 +93,20 @@ export default function Watch() {
     scheduleHide()
     return () => clearTimeout(hideTimerRef.current)
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    const handleMessage = (e) => {
+      if (e.origin !== 'https://vidlink.pro') return
+      if (e.data?.type === 'PLAYER_EVENT') {
+        const { event: eventType, currentTime } = e.data.data
+        if (typeof currentTime === 'number') {
+          vidTimeRef.current = currentTime
+        }
+      }
+    }
+    window.addEventListener('message', handleMessage)
+    return () => window.removeEventListener('message', handleMessage)
   }, [])
 
   // Always show overlay when paused, preparing or pinned
@@ -255,16 +271,15 @@ export default function Watch() {
     })
   }, [inRoom, subscribe, buildSrc, setSeason, setEpisode])
 
-  // ── Toggle play/pause ─────────────────────────────────────────────────────
   const togglePlay = useCallback(() => {
     if (paused) {
-      const at = pauseOffsetRef.current
+      const at = vidTimeRef.current || pauseOffsetRef.current
       playStartRef.current = Date.now() + LOAD_BUFFER_S * 1000
       setPaused(false)
       setIframeSrc(buildSrc(seasonRef.current, episodeRef.current, at, true))
       if (inRoom) send({ t: 'play', offset: at, season: seasonRef.current, episode: episodeRef.current, sentAt: Date.now() })
     } else {
-      const at = getOffset()
+      const at = vidTimeRef.current || getOffset()
       pauseOffsetRef.current = at
       playStartRef.current = null
       setPaused(true)
